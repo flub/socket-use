@@ -1,0 +1,19 @@
+[package]
+name = "sockets-use"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.75"
+bytes = "1.4.0"
+libc = "0.2.147"
+socket2 = "0.5.3"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "memcpy_arc"
+harness = false
