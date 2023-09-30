@@ -17,3 +17,7 @@ criterion = "0.5"
 [[bench]]
 name = "memcpy_arc"
 harness = false
+
+[[bench]]
+name = "array_vec"
+harness = false
