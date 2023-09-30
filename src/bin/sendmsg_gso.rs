@@ -1,15 +1,15 @@
+use std::alloc::Layout;
 use std::io::{self, IoSlice};
 use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
-use std::{iter, mem};
+use std::{iter, mem, ptr};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 const MSG_SIZE: usize = 1200;
 const MSG_COUNT: usize = 10_000_000;
-const BATCH_SIZE: usize = 64;
 
 fn main() -> Result<()> {
     let dst_sock = UdpSocket::bind("[::1]:0")?;
@@ -22,47 +22,55 @@ fn main() -> Result<()> {
 fn sender(dst: SocketAddr) -> Result<()> {
     let payload: Vec<u8> = iter::repeat(1u8).take(MSG_SIZE).collect();
     let payload = Bytes::from(payload);
-    let mut payloads = iter::repeat(payload).take(MSG_COUNT);
+    let payloads: Vec<Bytes> = iter::repeat_with(|| payload.clone())
+        .take(MSG_COUNT)
+        .collect();
 
     let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     let addr = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
     let addr = SockAddr::from(addr);
     sock.bind(&addr)?;
-    let batch_size = check_gso()?;
-    assert_eq!(batch_size, BATCH_SIZE);
     let dst = SockAddr::from(dst);
 
-    let mut mmsgs: [libc::mmsghdr; BATCH_SIZE] = unsafe { mem::zeroed() };
+    let gso_batch_size = check_gso()?;
 
-    let mut i = 0;
-    loop {
-        if let Some(payload) = payloads.next() {
-            let buf = IoSlice::new(&payload);
-            let bufs = [buf];
+    let mut msg: libc::msghdr = unsafe { mem::zeroed() };
+    let mut iovec: Vec<IoSlice> = Vec::with_capacity(gso_batch_size);
 
-            let msg = &mut mmsgs[i].msg_hdr;
-            msg.msg_name = dst.as_ptr() as *mut _;
-            msg.msg_namelen = dst.len();
-            msg.msg_iov = bufs.as_ptr() as *mut _;
-            msg.msg_iovlen = bufs.len();
+    for batch in payloads.chunks(gso_batch_size) {
+        iovec.clear();
+        iovec.extend(batch.iter().map(|payload| IoSlice::new(payload)));
+        msg.msg_name = dst.as_ptr() as *mut _;
+        msg.msg_namelen = dst.len();
+        msg.msg_iov = iovec.as_ptr() as *mut _;
+        msg.msg_iovlen = 1;
 
-            i += 1;
-            if i < BATCH_SIZE {
-                continue;
-            }
-        }
-        if i == 0 {
-            break; // No more payloads, batch empty
-        }
-        let ret = unsafe { libc::sendmmsg(sock.as_raw_fd(), mmsgs.as_mut_ptr(), i.try_into()?, 0) };
+        // The value of the auxiliary data to put in the control message.
+        // let value: u16 = gso_batch_size.try_into()?;
+        // let value: u16 = batch.len().try_into()?;
+        let segment_size: u16 = MSG_SIZE.try_into()?;
+        // The number of bytes needed for this control message.
+        let space = unsafe { libc::CMSG_SPACE(mem::size_of_val(&segment_size) as _) };
+        let layout = Layout::from_size_align(space as usize, mem::align_of::<libc::cmsghdr>())?;
+        let buf = unsafe { std::alloc::alloc(layout) };
+        msg.msg_control = buf as *mut libc::c_void;
+        msg.msg_controllen = layout.size();
+        let cmsg: &mut libc::cmsghdr = unsafe {
+            libc::CMSG_FIRSTHDR(&msg)
+                .as_mut()
+                .ok_or(anyhow!("No space for cmsg"))?
+        };
+        cmsg.cmsg_level = libc::SOL_UDP;
+        cmsg.cmsg_type = libc::UDP_SEGMENT;
+        cmsg.cmsg_len =
+            unsafe { libc::CMSG_LEN(mem::size_of_val(&segment_size) as _) } as libc::size_t;
+        unsafe { ptr::write(libc::CMSG_DATA(cmsg) as *mut u16, segment_size) };
+
+        let ret = unsafe { libc::sendmsg(sock.as_raw_fd(), &msg, 0) };
         if ret == -1 {
             return Err(io::Error::last_os_error().into());
         }
-        assert_eq!(ret, i.try_into()?); // Number of messages sent.
-        for mmsg in mmsgs {
-            assert_eq!(mmsg.msg_len as usize, MSG_SIZE); // Number of bytes sent.
-        }
-        i = 0;
+        assert_eq!(ret as usize, MSG_SIZE * gso_batch_size);
     }
     println!("send done");
     Ok(())
