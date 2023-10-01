@@ -2,29 +2,46 @@ use std::alloc::Layout;
 use std::io::{self, IoSlice};
 use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
-use std::{iter, mem, ptr};
+use std::{mem, panic, ptr, thread};
 
-use anyhow::{anyhow, Result};
-use bytes::Bytes;
+use anyhow::{anyhow, Context, Result};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-
-const MSG_SIZE: usize = 1200;
-const MSG_COUNT: usize = 10_000_000;
+use sockets_use::{MSG_COUNT, MSG_SIZE};
 
 fn main() -> Result<()> {
     let dst_sock = UdpSocket::bind("[::1]:0")?;
+    let dst_addr = dst_sock.local_addr()?;
 
-    sender(dst_sock.local_addr()?)?;
+    // let handle = thread::Builder::new()
+    //     .name("receiver".into())
+    //     .spawn(|| receiver(dst_sock))?;
+
+    sender(dst_addr)?;
+
+    // match handle.join() {
+    //     Ok(res) => res.context("receiver error")?,
+    //     Err(e) => panic::resume_unwind(e),
+    // }
 
     Ok(())
 }
 
+fn receiver(sock: UdpSocket) -> Result<()> {
+    const BUF_SIZE: usize = 1500;
+    let mut datagrams_received = 0;
+    let mut buf = [0u8; BUF_SIZE];
+    while datagrams_received < MSG_COUNT {
+        let (n, _addr) = sock.recv_from(&mut buf)?;
+        datagrams_received += 1;
+        println!("recv: {datagrams_received}");
+        assert_eq!(n, MSG_SIZE);
+    }
+    println!("receive done");
+    Ok(())
+}
+
 fn sender(dst: SocketAddr) -> Result<()> {
-    let payload: Vec<u8> = iter::repeat(1u8).take(MSG_SIZE).collect();
-    let payload = Bytes::from(payload);
-    let payloads: Vec<Bytes> = iter::repeat_with(|| payload.clone())
-        .take(MSG_COUNT)
-        .collect();
+    let payloads = sockets_use::payloads();
 
     let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     let addr = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
@@ -32,7 +49,11 @@ fn sender(dst: SocketAddr) -> Result<()> {
     sock.bind(&addr)?;
     let dst = SockAddr::from(dst);
 
-    let gso_batch_size = check_gso()?;
+    // Figure out our batch size, we may not exceed max_gso_segments for a gso batch, but a
+    // single msghdr's payload, i.e. the total size of it's iovec, may not exceed u16::MAX.
+    let max_gso_segments = check_gso()?;
+    let max_payloads = (u16::MAX / MSG_SIZE as u16) as usize;
+    let gso_batch_size = max_gso_segments.min(max_payloads);
 
     let mut msg: libc::msghdr = unsafe { mem::zeroed() };
     let mut iovec: Vec<IoSlice> = Vec::with_capacity(gso_batch_size);
@@ -43,11 +64,9 @@ fn sender(dst: SocketAddr) -> Result<()> {
         msg.msg_name = dst.as_ptr() as *mut _;
         msg.msg_namelen = dst.len();
         msg.msg_iov = iovec.as_ptr() as *mut _;
-        msg.msg_iovlen = 1;
+        msg.msg_iovlen = iovec.len();
 
         // The value of the auxiliary data to put in the control message.
-        // let value: u16 = gso_batch_size.try_into()?;
-        // let value: u16 = batch.len().try_into()?;
         let segment_size: u16 = MSG_SIZE.try_into()?;
         // The number of bytes needed for this control message.
         let space = unsafe { libc::CMSG_SPACE(mem::size_of_val(&segment_size) as _) };
@@ -70,7 +89,7 @@ fn sender(dst: SocketAddr) -> Result<()> {
         if ret == -1 {
             return Err(io::Error::last_os_error().into());
         }
-        assert_eq!(ret as usize, MSG_SIZE * gso_batch_size);
+        assert_eq!(ret as usize, MSG_SIZE * batch.len());
     }
     println!("send done");
     Ok(())
