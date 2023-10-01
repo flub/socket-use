@@ -26,19 +26,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn receiver(sock: UdpSocket) -> Result<()> {
-    const BUF_SIZE: usize = 1500;
-    let mut datagrams_received = 0;
-    let mut buf = [0u8; BUF_SIZE];
-    while datagrams_received < MSG_COUNT {
-        let (n, _addr) = sock.recv_from(&mut buf)?;
-        datagrams_received += 1;
-        println!("recv: {datagrams_received}");
-        assert_eq!(n, MSG_SIZE);
-    }
-    println!("receive done");
-    Ok(())
-}
+// fn receiver(sock: UdpSocket) -> Result<()> {
+//     const BUF_SIZE: usize = 1500;
+//     let mut datagrams_received = 0;
+//     let mut buf = [0u8; BUF_SIZE];
+//     while datagrams_received < MSG_COUNT {
+//         let (n, _addr) = sock.recv_from(&mut buf)?;
+//         datagrams_received += 1;
+//         println!("recv: {datagrams_received}");
+//         assert_eq!(n, MSG_SIZE);
+//     }
+//     println!("receive done");
+//     Ok(())
+// }
 
 fn sender(dst: SocketAddr) -> Result<()> {
     let payloads = sockets_use::payloads();
@@ -86,6 +86,7 @@ fn sender(dst: SocketAddr) -> Result<()> {
         unsafe { ptr::write(libc::CMSG_DATA(cmsg) as *mut u16, segment_size) };
 
         let ret = unsafe { libc::sendmsg(sock.as_raw_fd(), &msg, 0) };
+        unsafe { std::alloc::dealloc(buf, layout) };
         if ret == -1 {
             return Err(io::Error::last_os_error().into());
         }
