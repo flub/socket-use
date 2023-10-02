@@ -75,9 +75,11 @@ fn sender(dst: SocketAddr) -> Result<()> {
         msg.msg_control = buf as *mut libc::c_void;
         msg.msg_controllen = layout.size();
         let cmsg: &mut libc::cmsghdr = unsafe {
-            libc::CMSG_FIRSTHDR(&msg)
-                .as_mut()
-                .ok_or(anyhow!("No space for cmsg"))?
+            // We *must* initialise this memory before creating the reference to avoid UB.
+            let cmsg = libc::CMSG_FIRSTHDR(&msg);
+            let cmsg_zeroed: libc::cmsghdr = mem::zeroed();
+            ptr::copy_nonoverlapping(&cmsg_zeroed, cmsg, 1);
+            cmsg.as_mut().ok_or(anyhow!("No space for cmsg"))?
         };
         cmsg.cmsg_level = libc::SOL_UDP;
         cmsg.cmsg_type = libc::UDP_SEGMENT;
