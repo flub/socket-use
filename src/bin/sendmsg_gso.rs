@@ -69,8 +69,8 @@ fn sender(dst: SocketAddr) -> Result<()> {
         // The value of the auxiliary data to put in the control message.
         let segment_size: u16 = MSG_SIZE.try_into()?;
         // The number of bytes needed for this control message.
-        let space = unsafe { libc::CMSG_SPACE(mem::size_of_val(&segment_size) as _) };
-        let layout = Layout::from_size_align(space as usize, mem::align_of::<libc::cmsghdr>())?;
+        let cmsg_size = unsafe { libc::CMSG_SPACE(mem::size_of_val(&segment_size) as _) };
+        let layout = Layout::from_size_align(cmsg_size as usize, mem::align_of::<libc::cmsghdr>())?;
         let buf = unsafe { std::alloc::alloc(layout) };
         msg.msg_control = buf as *mut libc::c_void;
         msg.msg_controllen = layout.size();
