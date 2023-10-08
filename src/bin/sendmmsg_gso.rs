@@ -2,11 +2,11 @@ use std::alloc::Layout;
 use std::io::{self, IoSlice};
 use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
-use std::{iter, mem, panic, ptr, thread};
+use std::{iter, mem, ptr};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use sockets_use::{MSG_COUNT, MSG_SIZE};
+use sockets_use::MSG_SIZE;
 
 const BATCH_SIZE: usize = 64;
 
