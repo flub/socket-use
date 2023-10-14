@@ -21,3 +21,7 @@ harness = false
 [[bench]]
 name = "array_vec"
 harness = false
+
+[[bench]]
+name = "cmsg_init"
+harness = false
