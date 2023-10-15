@@ -4,7 +4,7 @@ use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::{mem, ptr};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use sockets_use::MSG_SIZE;
 
@@ -54,6 +54,9 @@ fn sender(dst: SocketAddr) -> Result<()> {
         let cmsg: &mut libc::cmsghdr = unsafe {
             // We *must* initialise this memory before creating the reference to avoid UB.
             let cmsg = libc::CMSG_FIRSTHDR(&msg);
+            if cmsg.is_null() {
+                bail!("No space for cmsg");
+            }
             let cmsg_zeroed: libc::cmsghdr = mem::zeroed();
             ptr::copy_nonoverlapping(&cmsg_zeroed, cmsg, 1);
             cmsg.as_mut().ok_or(anyhow!("No space for cmsg"))?
