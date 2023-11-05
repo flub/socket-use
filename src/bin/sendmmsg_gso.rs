@@ -61,6 +61,7 @@ fn sender(dst: SocketAddr) -> Result<()> {
     let mut iovecs: Vec<Vec<IoSlice>> = iter::repeat_with(|| Vec::with_capacity(gso_batch_size))
         .take(BATCH_SIZE)
         .collect();
+    let mut bufs: Vec<(*mut u8, Layout)> = Vec::with_capacity(BATCH_SIZE);
 
     for batch in payloads.chunks(gso_batch_size * BATCH_SIZE) {
         let mut mmsg_batch_size = 0;
@@ -83,6 +84,7 @@ fn sender(dst: SocketAddr) -> Result<()> {
             if buf.is_null() {
                 bail!("alloc failed");
             }
+            bufs.push((buf, layout));
             msg.msg_control = buf as *mut libc::c_void;
             msg.msg_controllen = layout.size();
             let cmsg: &mut libc::cmsghdr = unsafe {
@@ -103,6 +105,9 @@ fn sender(dst: SocketAddr) -> Result<()> {
         }
         let ret =
             unsafe { libc::sendmmsg(sock.as_raw_fd(), mmsgs.as_mut_ptr(), mmsg_batch_size, 0) };
+        for (buf, layout) in bufs.drain(..) {
+            unsafe { std::alloc::dealloc(buf, layout) };
+        }
         if ret == -1 {
             return Err(io::Error::last_os_error().into());
         }
