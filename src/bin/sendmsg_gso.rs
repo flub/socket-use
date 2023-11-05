@@ -49,6 +49,9 @@ fn sender(dst: SocketAddr) -> Result<()> {
         let cmsg_size = unsafe { libc::CMSG_SPACE(mem::size_of_val(&segment_size) as _) };
         let layout = Layout::from_size_align(cmsg_size as usize, mem::align_of::<libc::cmsghdr>())?;
         let buf = unsafe { std::alloc::alloc(layout) };
+        if buf.is_null() {
+            bail!("alloc failed");
+        }
         msg.msg_control = buf as *mut libc::c_void;
         msg.msg_controllen = layout.size();
         let cmsg: &mut libc::cmsghdr = unsafe {
